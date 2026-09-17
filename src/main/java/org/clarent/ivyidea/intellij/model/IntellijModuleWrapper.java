@@ -114,13 +114,12 @@ public class IntellijModuleWrapper implements AutoCloseable {
 
     private List<String> getDependenciesToRemove(OrderRootType type, Collection<ResolvedDependency> resolvedDependencies) {
         final List<String> intellijDependencies = libraryModels.getIntellijDependencyUrlsForType(type);
-        final List<String> dependenciesToRemove = new ArrayList<String>(intellijDependencies); // add all dependencies initially
+        final List<String> dependenciesToRemove = new ArrayList<>(intellijDependencies); // add all dependencies initially
         for (String intellijDependency : intellijDependencies) {
             for (ResolvedDependency resolvedDependency : resolvedDependencies) {
                 // TODO: We don't touch module to module dependencies here because we currently can't determine if
                 //          they were added by IvyIDEA or by the user
-                if (resolvedDependency instanceof ExternalDependency) {
-                    ExternalDependency externalDependency = (ExternalDependency) resolvedDependency;
+                if (resolvedDependency instanceof ExternalDependency externalDependency) {
                     if (externalDependency.isSameDependency(intellijDependency)) {
                         dependenciesToRemove.remove(intellijDependency); // remove existing ones
                     }
