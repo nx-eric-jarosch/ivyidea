@@ -16,13 +16,16 @@
 
 package org.clarent.ivyidea.intellij.model;
 
-import com.intellij.openapi.roots.ModifiableRootModel;
+import com.intellij.openapi.project.Project;
+import com.intellij.openapi.module.Module;
 import com.intellij.openapi.roots.OrderRootType;
 import com.intellij.openapi.roots.libraries.Library;
 import com.intellij.openapi.roots.libraries.LibraryTable;
+import com.intellij.openapi.roots.libraries.LibraryTablesRegistrar;
 import com.intellij.openapi.util.Disposer;
 import org.clarent.ivyidea.config.IvyIdeaConfigHelper;
 import org.clarent.ivyidea.resolve.dependency.ExternalDependency;
+import org.jetbrains.annotations.NotNull;
 
 import java.io.Closeable;
 import java.util.ArrayList;
@@ -36,14 +39,18 @@ import static org.clarent.ivyidea.util.StringUtils.isBlank;
 
 class LibraryModels implements Closeable {
 
-    private static final Logger LOGGER = Logger.getLogger(LibraryModels.class.getName());    
+    private static final Logger LOGGER = Logger.getLogger(LibraryModels.class.getName());
 
     private final ConcurrentMap<String, Library.ModifiableModel> libraryModels = new ConcurrentHashMap<String, Library.ModifiableModel>();
 
-    private ModifiableRootModel intellijModule;
+    private final IntellijModuleWrapper moduleWrapper;
+    private final Project project;
+    private final Module module;
 
-    LibraryModels(ModifiableRootModel intellijModule) {
-        this.intellijModule = intellijModule;
+    public LibraryModels(@NotNull IntellijModuleWrapper moduleWrapper, @NotNull Module module) {
+        this.moduleWrapper = moduleWrapper;
+        this.project = module.getProject();
+        this.module = module;
     }
 
     public Library.ModifiableModel getForExternalDependency(final ExternalDependency externalDependency) {
@@ -52,16 +59,17 @@ class LibraryModels implements Closeable {
     }
 
     private Library.ModifiableModel getForConfiguration(String ivyConfiguration) {
-        final String libraryName = IvyIdeaConfigHelper.getCreatedLibraryName(intellijModule, ivyConfiguration);
-        return libraryModels.computeIfAbsent(libraryName, _libraryName -> getIvyIdeaLibrary(intellijModule, libraryName).getModifiableModel());
+        final String libraryName = IvyIdeaConfigHelper.getCreatedLibraryName(project, module, ivyConfiguration);
+        return libraryModels.computeIfAbsent(libraryName, _libraryName -> getIvyIdeaLibrary(libraryName).getModifiableModel());
     }
 
-    private Library getIvyIdeaLibrary(ModifiableRootModel modifiableRootModel, final String libraryName) {
-        final LibraryTable libraryTable = modifiableRootModel.getModuleLibraryTable();
-        final Library library = libraryTable.getLibraryByName(libraryName);
+    private Library getIvyIdeaLibrary(final String libraryName) {
+        final LibraryTable libraryTable = LibraryTablesRegistrar.getInstance().getLibraryTable(project);
+        Library library = libraryTable.getLibraryByName(libraryName);
         if (library == null) {
-            LOGGER.info("Internal library not found for module " + modifiableRootModel.getModule().getModuleFilePath() + ", creating with name " + libraryName + "...");
-            return libraryTable.createLibrary(libraryName);
+            LOGGER.info("Internal library not found for module " + module.getName() + ", creating with name " + libraryName + "...");
+            library = libraryTable.createLibrary(libraryName);
+            moduleWrapper.addLibrary(library);
         }
         return library;
     }
@@ -85,8 +93,10 @@ class LibraryModels implements Closeable {
     public void close() {
         for (Library.ModifiableModel libraryModel : libraryModels.values()) {
             if (libraryModel.isChanged()) {
+                LOGGER.info("commit modified libraryModel " + libraryModel.getName());
                 libraryModel.commit();
             } else {
+                LOGGER.info("dispose unmodified libraryModel " + libraryModel.getName());
                 Disposer.dispose(libraryModel);
             }
         }

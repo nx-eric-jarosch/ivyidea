@@ -22,8 +22,6 @@ import com.intellij.openapi.roots.ModuleRootManager;
 import com.intellij.openapi.roots.OrderRootType;
 import com.intellij.openapi.roots.libraries.Library;
 import com.intellij.openapi.roots.libraries.Library.ModifiableModel;
-import com.intellij.openapi.roots.libraries.LibraryTable;
-import org.clarent.ivyidea.config.IvyIdeaConfigHelper;
 import org.clarent.ivyidea.resolve.dependency.ExternalDependency;
 import org.clarent.ivyidea.resolve.dependency.ResolvedDependency;
 
@@ -38,7 +36,7 @@ public class IntellijModuleWrapper implements AutoCloseable {
         ModifiableRootModel modifiableModel = null;
         try {
             modifiableModel = ModuleRootManager.getInstance(module).getModifiableModel();
-            return new IntellijModuleWrapper(modifiableModel);
+            return new IntellijModuleWrapper(modifiableModel, module);
         } catch (RuntimeException e) {
             if (modifiableModel != null) {
                 modifiableModel.dispose();
@@ -47,9 +45,9 @@ public class IntellijModuleWrapper implements AutoCloseable {
         }
     }
 
-    private IntellijModuleWrapper(ModifiableRootModel intellijModule) {
+    private IntellijModuleWrapper(ModifiableRootModel intellijModule, Module module) {
         this.intellijModule = intellijModule;
-        this.libraryModels = new LibraryModels(intellijModule);
+        this.libraryModels = new LibraryModels(this, module);
     }
 
     public void updateDependencies(Collection<ResolvedDependency> resolvedDependencies) {
@@ -81,6 +79,10 @@ public class IntellijModuleWrapper implements AutoCloseable {
         libraryModel.addRoot(externalDependency.getUrlForLibraryRoot(), externalDependency.getType());
     }
 
+    public void addLibrary(Library library) {
+        intellijModule.addLibraryEntry(library);
+    }
+
     public boolean alreadyHasDependencyOnModule(Module module) {
         final Module[] existingDependencies = intellijModule.getModuleDependencies();
         for (Module existingDependency : existingDependencies) {
@@ -106,24 +108,6 @@ public class IntellijModuleWrapper implements AutoCloseable {
             List<String> dependenciesToRemove = getDependenciesToRemove(type, dependenciesToKeep);
             for (String dependencyUrl : dependenciesToRemove) {
                 libraryModels.removeDependency(type, dependencyUrl);
-            }
-        }
-
-        // remove resolved libraries that are no longer used
-        Set<String> librariesInUse = new HashSet<String>();
-        for (ResolvedDependency dependency : dependenciesToKeep) {
-            if (dependency instanceof ExternalDependency) {
-                ExternalDependency externalDependency = (ExternalDependency) dependency;
-                String library = IvyIdeaConfigHelper.getCreatedLibraryName(intellijModule, externalDependency.getConfigurationName());
-                librariesInUse.add(library);
-            }
-        }
-
-        final LibraryTable libraryTable = intellijModule.getModuleLibraryTable();
-        for (Library library : libraryTable.getLibraries()) {
-            final String libraryName = library.getName();
-            if (IvyIdeaConfigHelper.isCreatedLibraryName(libraryName) && !librariesInUse.contains(libraryName)) {
-                libraryTable.removeLibrary(library);
             }
         }
     }

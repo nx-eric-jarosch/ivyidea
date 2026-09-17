@@ -18,7 +18,7 @@ package org.clarent.ivyidea.intellij.ui;
 
 import com.intellij.openapi.util.IconLoader;
 
-import javax.swing.*;
+import javax.swing.Icon;
 
 /**
  * Helper interface for easy access to icons used in IvyIDEA.
@@ -28,9 +28,7 @@ import javax.swing.*;
 
 public interface IvyIdeaIcons {
 
-    public static final Icon MAIN_ICON_SMALL = IconLoader.findIcon("/ivyidea13.png");
-    public static final Icon MAIN_ICON = IconLoader.findIcon("/ivyidea32.png");
-
-//    public static final Icon ERROR_ICON = IconLoader.findIcon("/compiler/error.png");
+    Icon MAIN_ICON_SMALL = IconLoader.findIcon("/ivyidea13.png", IvyIdeaIcons.class);
+    Icon MAIN_ICON = IconLoader.findIcon("/ivyidea32.png", IvyIdeaIcons.class);
 
 }

@@ -26,14 +26,18 @@ import com.intellij.openapi.module.Module;
 import com.intellij.openapi.progress.ProgressIndicator;
 import com.intellij.openapi.progress.ProgressManager;
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.roots.LibraryOrderEntry;
 import com.intellij.openapi.roots.ModifiableRootModel;
 import com.intellij.openapi.roots.ModuleRootManager;
 import com.intellij.openapi.roots.libraries.Library;
 import com.intellij.openapi.roots.libraries.LibraryTable;
+import com.intellij.openapi.roots.libraries.LibraryTablesRegistrar;
 import org.clarent.ivyidea.config.IvyIdeaConfigHelper;
 import org.clarent.ivyidea.intellij.IntellijUtils;
 import org.clarent.ivyidea.intellij.task.IvyIdeaBackgroundTask;
 import org.jetbrains.annotations.NotNull;
+
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Action to remove all module libraries that match the name of the
@@ -45,24 +49,46 @@ public class RemoveAllIvyIdeaModuleLibrariesAction extends AnAction {
 
     public void actionPerformed(AnActionEvent e) {
         final Project project = PlatformDataKeys.PROJECT.getData(e.getDataContext());
+        if (project == null)
+            return;
+
         ProgressManager.getInstance().run(new IvyIdeaBackgroundTask(e) {
             public void run(@NotNull final ProgressIndicator indicator) {
                 final Module[] facet = IntellijUtils.getAllModulesWithIvyIdeaFacet(project);
+                final LibraryTable projectLibraryTable = LibraryTablesRegistrar.getInstance().getLibraryTable(project);
                 indicator.setIndeterminate(false);
                 for (final Module module : facet) {
                     indicator.setText2("Removing for module " + module.getName());
                     ApplicationManager.getApplication().invokeAndWait(() -> ApplicationManager.getApplication().runWriteAction(() -> {
-                        final ModifiableRootModel model = ModuleRootManager.getInstance(module).getModifiableModel();
-                        final LibraryTable moduleLibraryTable = model.getModuleLibraryTable();
-                        final Library[] libraries = moduleLibraryTable.getLibraries();
-                        boolean found = false;
-                        for (final Library library : libraries) {
+
+                        // =======
+                        // Legacy code: ensures that old 'module-library' in *.iml files are removed.
+                        AbstractResolveAction.removeLegacyModuleLibraries(module);
+
+                        // =======
+                        // New: store dependencies as project libraries
+                        // Another alternative would have been to create SyntheticLibraries (these don't get persisted)
+                        //   but ivy resolution can be slow, so I'm choosing to use the project-libraries as a cache.
+                        Library[] projectLibraries = projectLibraryTable.getLibraries();
+                        for (Library library : projectLibraries) {
                             if (IvyIdeaConfigHelper.isCreatedLibraryName(library.getName())) {
-                                found = true;
-                                moduleLibraryTable.removeLibrary(library);
+                                projectLibraryTable.removeLibrary(library);
                             }
                         }
-                        if (found) {
+                        // remove ivy libraries from modules
+                        final ModifiableRootModel model = ModuleRootManager.getInstance(module).getModifiableModel();
+                        final AtomicBoolean modelDirty = new AtomicBoolean(false);
+                        model.orderEntries().forEach(orderEntry -> {
+                            if (orderEntry instanceof LibraryOrderEntry loe) {
+                                if (IvyIdeaConfigHelper.isCreatedLibraryName(loe.getLibraryName())) {
+                                    model.removeOrderEntry(orderEntry);
+                                    modelDirty.set(true);
+                                }
+                            }
+                            return true;
+                        });
+
+                        if (modelDirty.get()) {
                             model.commit();
                         } else {
                             model.dispose();

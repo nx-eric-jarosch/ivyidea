@@ -18,7 +18,6 @@ package org.clarent.ivyidea.config;
 
 import com.intellij.openapi.module.Module;
 import com.intellij.openapi.project.Project;
-import com.intellij.openapi.roots.ModifiableRootModel;
 import com.intellij.util.net.HttpConfigurable;
 import org.apache.ivy.core.resolve.ResolveOptions;
 import org.apache.ivy.core.settings.IvySettings;
@@ -54,11 +53,10 @@ public class IvyIdeaConfigHelper {
 
     private static final String RESOLVED_LIB_NAME_ROOT = "IvyIDEA";
 
-    public static String getCreatedLibraryName(final ModifiableRootModel model, final String configName) {
-        final Project project = model.getProject();
+    public static String getCreatedLibraryName(final Project project, final Module module, final String configName) {
         String libraryName = RESOLVED_LIB_NAME_ROOT;
         if (isLibraryNameIncludesModule(project)) {
-            final String moduleName = model.getModule().getName();
+            final String moduleName = module.getName();
             libraryName += "-" + moduleName;
         }
         if (isLibraryNameIncludesConfiguration(project)) {
@@ -142,7 +140,7 @@ public class IvyIdeaConfigHelper {
     }
 
     @Nullable
-    private static String getIvySettingsFile(Module module) throws IvySettingsNotFoundException {
+    public static String getIvySettingsFile(Module module) throws IvySettingsNotFoundException {
         final IvyIdeaFacetConfiguration moduleConfiguration = getModuleConfiguration(module);
         if (moduleConfiguration.isUseProjectSettings()) {
             return getProjectIvySettingsFile(module.getProject());

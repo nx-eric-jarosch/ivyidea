@@ -21,15 +21,33 @@ import com.intellij.execution.ui.ConsoleViewContentType;
 import com.intellij.openapi.actionSystem.ActionUpdateThread;
 import com.intellij.openapi.actionSystem.AnAction;
 import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.fileEditor.FileDocumentManager;
 import com.intellij.openapi.module.Module;
+import com.intellij.openapi.progress.ProgressIndicator;
+import com.intellij.openapi.progress.ProgressManager;
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.roots.ModifiableRootModel;
+import com.intellij.openapi.roots.ModuleRootManager;
+import com.intellij.openapi.roots.libraries.Library;
+import com.intellij.openapi.roots.libraries.LibraryTable;
+import com.intellij.util.concurrency.Semaphore;
+import org.clarent.ivyidea.config.IvyIdeaConfigHelper;
+import org.clarent.ivyidea.exception.IvyFileReadException;
+import org.clarent.ivyidea.exception.IvySettingsFileReadException;
+import org.clarent.ivyidea.exception.IvySettingsNotFoundException;
 import org.clarent.ivyidea.intellij.IntellijUtils;
+import org.clarent.ivyidea.intellij.IvyIdeaListener;
 import org.clarent.ivyidea.intellij.facet.config.IvyIdeaFacetConfiguration;
 import org.clarent.ivyidea.intellij.model.IntellijModuleWrapper;
+import org.clarent.ivyidea.intellij.task.IvyIdeaResolveBackgroundTask;
+import org.clarent.ivyidea.ivy.IvyManager;
+import org.clarent.ivyidea.resolve.IntellijDependencyResolver;
 import org.clarent.ivyidea.resolve.dependency.ResolvedDependency;
 import org.clarent.ivyidea.resolve.problem.ResolveProblem;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Set;
 
@@ -37,20 +55,133 @@ import java.util.Set;
  * @author Guy Mahieu
  */
 public abstract class AbstractResolveAction extends AnAction {
+    protected static void removeLegacyModuleLibraries(Module module) {
+        final ModifiableRootModel model = ModuleRootManager.getInstance(module).getModifiableModel();
+        final LibraryTable moduleLibraryTable = model.getModuleLibraryTable();
+        final Library[] libraries = moduleLibraryTable.getLibraries();
 
-    protected void updateIntellijModel(final Module module, final List<ResolvedDependency> dependencies) {
+        boolean modelDirty = false;
+        for (final Library library : libraries) {
+            if (IvyIdeaConfigHelper.isCreatedLibraryName(library.getName())) {
+                modelDirty = true;
+                moduleLibraryTable.removeLibrary(library);
+            }
+        }
+
+        if (modelDirty) {
+            model.commit();
+        } else {
+            model.dispose();
+        }
+    }
+
+    /**
+     * Resolves the Ivy dependencies for the given Project.
+     *
+     * @param project     Mandatory: the Project to resolve for.
+     * @param taskText    Optional: the text to show for this tasks' progress.
+     * @param resolveDone Optional: a semaphore for blocking until the resolve action is done.
+     */
+    public static void resolveForProject(Project project, String taskText, Semaphore resolveDone) {
+        if (project == null)
+            return;
+        if (taskText == null)
+            taskText = "resolve for project " + project.getName();
+
+        FileDocumentManager.getInstance().saveAllDocuments();
+        ProgressManager.getInstance().run(new IvyIdeaResolveBackgroundTask(project, taskText) {
+            public void doResolve(@NotNull ProgressIndicator indicator) throws IvySettingsNotFoundException, IvyFileReadException, IvySettingsFileReadException {
+                IvyIdeaListener listener = null;
+                try {
+                    listener = project.getMessageBus().syncPublisher(IvyIdeaListener.TOPIC);
+                    listener.resolveStarted();
+
+                    clearConsole(myProject);
+                    final IvyManager ivyManager = new IvyManager();
+
+                    Collection<IntellijDependencyResolver> resolvers = new ArrayList<>();
+                    for (final Module module : IntellijUtils.getAllModulesWithIvyIdeaFacet(project)) {
+                        getProgressMonitorThread().setIvy(ivyManager.getIvy(module));
+                        indicator.setText2("Resolving for module " + module.getName());
+                        final IntellijDependencyResolver resolver = new IntellijDependencyResolver(ivyManager);
+                        resolver.resolve(module);
+                        resolvers.add(resolver);
+
+                        if (indicator.isCanceled()) {
+                            return;
+                        }
+                    }
+
+                    for (IntellijDependencyResolver resolver : resolvers) {
+                        Module module = resolver.getModule();
+                        updateIntellijModel(module, resolver.getDependencies());
+                        reportProblems(module, resolver.getProblems());
+                    }
+
+                } finally {
+                    if (listener != null)
+                        listener.resolveFinished();
+                    if (resolveDone != null)
+                        resolveDone.up();
+                }
+            }
+        });
+    }
+
+    /**
+     * Resolves the Ivy dependencies for the given Module.
+     *
+     * @param module      Mandatory: the Module to resolve for.
+     * @param taskText    Optional: the text to show for this tasks' progress.
+     * @param resolveDone Optional: a semaphore for blocking until the resolve action is done.
+     */
+    public static void resolveForModule(Module module, String taskText, Semaphore resolveDone) {
+        if (module == null)
+            return;
+        if (taskText == null)
+            taskText = "resolve for module " + module.getName();
+
+        FileDocumentManager.getInstance().saveAllDocuments();
+        Project project = module.getProject();
+        ProgressManager.getInstance().run(new IvyIdeaResolveBackgroundTask(project, taskText) {
+            public void doResolve(@NotNull ProgressIndicator progressIndicator) throws IvySettingsNotFoundException, IvyFileReadException, IvySettingsFileReadException {
+                IvyIdeaListener listener = null;
+                try {
+                    listener = module.getProject().getMessageBus().syncPublisher(IvyIdeaListener.TOPIC);
+                    listener.resolveStarted();
+
+                    clearConsole(myProject);
+                    final IvyManager ivyManager = new IvyManager();
+                    getProgressMonitorThread().setIvy(ivyManager.getIvy(module));
+
+                    final IntellijDependencyResolver resolver = new IntellijDependencyResolver(ivyManager);
+                    resolver.resolve(module);
+                    updateIntellijModel(module, resolver.getDependencies());
+                    reportProblems(module, resolver.getProblems());
+                } finally {
+                    if (listener != null)
+                        listener.resolveFinished();
+                    if (resolveDone != null)
+                        resolveDone.up();
+                }
+            }
+        });
+    }
+
+    public static void updateIntellijModel(final Module module, final List<ResolvedDependency> dependencies) {
         ApplicationManager.getApplication().invokeLater(() -> ApplicationManager.getApplication().runWriteAction(() -> {
+            removeLegacyModuleLibraries(module);
             try (IntellijModuleWrapper moduleWrapper = IntellijModuleWrapper.forModule(module)) {
                 moduleWrapper.updateDependencies(dependencies);
             }
         }));
     }
 
-    protected void clearConsole(final Project project) {
+    public static void clearConsole(final Project project) {
         ApplicationManager.getApplication().invokeLater(() -> IntellijUtils.getConsoleView(project).clear());
     }
 
-    protected void reportProblems(final Module module, final List<ResolveProblem> problems) {
+    public static void reportProblems(final Module module, final List<ResolveProblem> problems) {
         ApplicationManager.getApplication().invokeLater(() -> {
             final IvyIdeaFacetConfiguration ivyIdeaFacetConfiguration = IvyIdeaFacetConfiguration.getInstance(module);
             if (ivyIdeaFacetConfiguration == null) {
